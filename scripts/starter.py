@@ -7,14 +7,14 @@ import random
 from geometry_msgs.msg import Twist
 from kobuki_msgs.msg import SensorState
 
-# control at 100Hz
-CONTROL_PERIOD = rospy.Duration(0.01)
+# control at 25hz
+CONTROL_PERIOD = rospy.Duration(0.04)
 
 # react to bumpers for 1 second
 BUMPER_DURATION = rospy.Duration(1.0)
 
-# random actions should last 0.5 second
-RANDOM_ACTION_DURATION = rospy.Duration(0.5)
+# random actions should last 2.0 second
+RANDOM_ACTION_DURATION = rospy.Duration(2.0)
 
 # our controller class
 class Controller:
@@ -32,12 +32,18 @@ class Controller:
         # start out in wandering state
         self.state = 'wander'
 
+        # when did we transition to this state
+        self.state_start_time = rospy.Time.now()
+
         # pick out a random action to do when we start driving
         self.pick_random_action()
 
         # we will stop driving if picked up or about to drive off edge
         # of something
         self.cliff_alert = 0
+
+        # we will change states when bumper is hit but initially no bumper
+        self.bumper = 0
 
         # set up subscriber for sensor state for bumpers/cliffs
         rospy.Subscriber('/mobile_base/sensors/core',
@@ -48,60 +54,23 @@ class Controller:
         # set up control timer at 100 Hz
         rospy.Timer(CONTROL_PERIOD, self.control_callback)
 
-        # set up timer for random actions at 2 hz
-        rospy.Timer(RANDOM_ACTION_DURATION, self.pick_random_action)
-
     # called whenever sensor messages are received
     def sensor_callback(self, msg):
 
         # set cliff alert
         self.cliff_alert = msg.cliff
 
-        # ignore bumper if we are already reacting to it
-        if self.state in ['backward', 'turn_left', 'turn_right']:
-            return
-
-        # see what we should do next
-        next_state = None
-
-        if msg.bumper & SensorState.BUMPER_CENTRE:
-            next_state = 'backward'
-        elif msg.bumper & SensorState.BUMPER_LEFT:
-            next_state = 'turn_right'
-        elif msg.bumper & SensorState.BUMPER_RIGHT:
-            next_state = 'turn_left'
-
-        # if bumped, go to next state
-        if next_state is not None:
-            
-            self.state = next_state
-
-            # in 1 second, finish this state
-            rospy.Timer(BUMPER_DURATION, self.bumper_done, oneshot=True)
+        # set bumper bitflags
+        self.bumper = msg.bumper
                             
-    # called when we are done with a bumper reaction
-    def bumper_done(self, timer_event=None):
-
-        # if we just backed up, time to turn
-        if self.state == 'backward':
-            
-            # go to turning state
-            self.state = 'turn_left'
-            # reset again in a second
-            rospy.Timer(BUMPER_DURATION, self.bumper_done, oneshot=True)
-                        
-        else: # we just turned, so go return to wandering
-            
-            self.state = 'wander'
-
     # called when it's time to choose a new random wander direction
     def pick_random_action(self, timer_event=None):
 
         self.wander_action = Twist()
         self.wander_action.linear.x = random.uniform(0.2, 0.3)
         self.wander_action.angular.z = random.uniform(-1.0, 1.0)
-    
-    # called 100 times per second
+
+    # called many times per second
     def control_callback(self, timer_event=None):
 
         # initialize commanded vel to 0, 0
@@ -110,7 +79,45 @@ class Controller:
         # only set commanded velocity to non-zero if not picked up:
         if not self.cliff_alert:
 
-            # state maps straightforwardly to command
+            orig_state = self.state
+
+            time_in_state = rospy.Time.now() - self.state_start_time
+
+            ################################################################################
+
+            # handle state transition
+            if self.state == 'wander':
+
+                if self.bumper & SensorState.BUMPER_CENTRE:
+                    self.state = 'backward'
+                elif self.bumper & SensorState.BUMPER_LEFT:
+                    self.state = 'turn_right'
+                elif self.bumper & SensorState.BUMPER_RIGHT:
+                    self.state = 'turn_left'
+                elif time_in_state > RANDOM_ACTION_DURATION:
+                    # fake a transition to reset the wander action
+                    orig_state = None
+
+            elif self.state == 'backward' and time_in_state > BUMPER_DURATION:
+
+                self.state = 'turn_left'
+
+            elif self.state in ['turn_left', 'turn_right'] and time_in_state > BUMPER_DURATION:
+
+                self.state = 'wander'
+
+            # handle updating state timer and random action
+            if self.state != orig_state: # was state changed?
+                # if so, record when we entered into it
+                self.state_start_time = rospy.Time.now()
+                # special case for entering wander state - pick a new random action
+                if self.state == 'wander':
+                    self.pick_random_action()
+
+            ################################################################################
+
+            # handle state output (control)
+            # each state maps straightforwardly to command
             if self.state == 'backward':
                 cmd_vel.linear.x = -0.3
             elif self.state == 'turn_left':
