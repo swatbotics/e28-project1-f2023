@@ -5,7 +5,7 @@ project(project1)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
-  blobfinder
+  blobfinder2
   geometry_msgs
   kobuki_msgs
   rospy
@@ -104,7 +104,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES project1
-#  CATKIN_DEPENDS blobfinder geometry_msgs kobuki_msgs rospy std_msgs
+#  CATKIN_DEPENDS blobfinder2 geometry_msgs kobuki_msgs rospy std_msgs
 #  DEPENDS system_lib
 )
 
